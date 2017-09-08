@@ -8,11 +8,12 @@ const https = require('https')
 const TIMEOUT_IN_MILLISECONDS = 30 * 1000
 
 /**
+* Calculates HTTP timings
 * @function getResult
 * @param {Object} timings
 * @param {Number} timings.startAt
+* @param {Number|undefined} timings.dnsLookupAt
 * @param {Number} timings.tcpConnectionAt
-* @param {Number} timings.dnsLookupAt
 * @param {Number|undefined} timings.tlsHandshakeAt
 * @param {Number} timings.firstByteAt
 * @param {Number} timings.endAt
@@ -20,8 +21,10 @@ const TIMEOUT_IN_MILLISECONDS = 30 * 1000
 */
 function getResult (timings) {
   return {
-    dnsLookup: timings.dnsLookupAt - timings.startAt,
+    // There is no DNS lookup with IP address
+    dnsLookup: timings.dnsLookupAt !== undefined ? timings.dnsLookupAt - timings.startAt : timings.dnsLookupAt,
     tcpConnection: timings.tcpConnectionAt - (timings.dnsLookupAt || timings.startAt),
+    // There is no TLS handshake without https
     tlsHandshake: timings.tlsHandshakeAt !== undefined ? (timings.tlsHandshakeAt - timings.tcpConnectionAt) : undefined,
     firstByte: timings.firstByteAt - (timings.tlsHandshakeAt || timings.tcpConnectionAt),
     contentTransfer: timings.endAt - timings.firstByteAt,
@@ -30,6 +33,7 @@ function getResult (timings) {
 }
 
 /**
+* Creates a request and collects HTTP timings
 * @function request
 * @param {Object} options
 * @param {String} [options.method='GET']
@@ -50,10 +54,13 @@ function request ({
   headers = {},
   body
 } = {}, callback) {
+  // Validation
   assert(protocol, 'options.protocol is required')
+  assert(['http:', 'https:'].includes(protocol), 'options.protocol must be one of: "http:", "https:"')
   assert(hostname, 'options.hostname is required')
   assert(callback, 'callback is required')
 
+  // Initialization
   const timings = {
     startAt: Date.now(),
     dnsLookupAt: undefined,
@@ -63,6 +70,7 @@ function request ({
     endAt: undefined
   }
 
+  // Making request
   const req = (protocol.startsWith('https') ? https : http).request({
     protocol,
     method,
@@ -80,6 +88,9 @@ function request ({
       timings.firstByteAt = Date.now()
     })
     res.on('data', (chunk) => { responseBody += chunk })
+
+    // End event is not emitted when stream is not consumed fully
+    // in our case we consume it see: res.on('data')
     res.on('end', () => {
       timings.endAt = Date.now()
 
@@ -112,6 +123,7 @@ function request ({
   })
   req.on('error', callback)
 
+  // Sending body
   if (body) {
     req.write(body)
   }
@@ -124,6 +136,6 @@ request(Object.assign(url.parse('https://api.github.com'), {
   headers: {
     'User-Agent': 'Example'
   }
-}), (err, { timings }) => {
-  console.log(timings)
+}), (err, res) => {
+  console.log(err || res.timings)
 })
