@@ -9,7 +9,7 @@ const TIMEOUT_IN_MILLISECONDS = 30 * 1000
 
 /**
 * @function getResult
-* @param {Object} timings {
+* @param {Object} timings
 * @param {Number} timings.startAt
 * @param {Number} timings.tcpConnectionAt
 * @param {Number} timings.dnsLookupAt
@@ -32,12 +32,12 @@ function getResult (timings) {
 /**
 * @function request
 * @param {Object} options
-* @param {String} [options.method], default: 'GET'
+* @param {String} [options.method='GET']
 * @param {String} options.protocol
 * @param {String} options.hostname
 * @param {Number} [options.port]
 * @param {String} [options.path]
-* @param {Object} [options.headers], default: {}
+* @param {Object} [options.headers={}]
 * @param {String} [options.body]
 * @param {Function} callback
 */
