@@ -6,31 +6,8 @@ const http = require('http')
 const https = require('https')
 
 const TIMEOUT_IN_MILLISECONDS = 30 * 1000
-
-/**
-* Calculates HTTP timings
-* @function getResult
-* @param {Object} timings
-* @param {Number} timings.startAt
-* @param {Number|undefined} timings.dnsLookupAt
-* @param {Number} timings.tcpConnectionAt
-* @param {Number|undefined} timings.tlsHandshakeAt
-* @param {Number} timings.firstByteAt
-* @param {Number} timings.endAt
-* @return { dnsLookup, tcpConnection, tlsHandshake, firstByte, contentTransfer, total }
-*/
-function getResult (timings) {
-  return {
-    // There is no DNS lookup with IP address
-    dnsLookup: timings.dnsLookupAt !== undefined ? timings.dnsLookupAt - timings.startAt : timings.dnsLookupAt,
-    tcpConnection: timings.tcpConnectionAt - (timings.dnsLookupAt || timings.startAt),
-    // There is no TLS handshake without https
-    tlsHandshake: timings.tlsHandshakeAt !== undefined ? (timings.tlsHandshakeAt - timings.tcpConnectionAt) : undefined,
-    firstByte: timings.firstByteAt - (timings.tlsHandshakeAt || timings.tcpConnectionAt),
-    contentTransfer: timings.endAt - timings.firstByteAt,
-    total: timings.endAt - timings.startAt
-  }
-}
+const NS_PER_SEC = 1e9
+const MS_PER_NS = 1e6
 
 /**
 * Creates a request and collects HTTP timings
@@ -61,8 +38,9 @@ function request ({
   assert(callback, 'callback is required')
 
   // Initialization
-  const timings = {
-    startAt: Date.now(),
+  const eventTimes = {
+    // use process.hrtime() as it's not a subject of clock drift
+    startAt: process.hrtime(),
     dnsLookupAt: undefined,
     tcpConnectionAt: undefined,
     tlsHandshakeAt: undefined,
@@ -85,18 +63,18 @@ function request ({
 
     // Response events
     res.once('readable', () => {
-      timings.firstByteAt = Date.now()
+      eventTimes.firstByteAt = process.hrtime()
     })
     res.on('data', (chunk) => { responseBody += chunk })
 
     // End event is not emitted when stream is not consumed fully
     // in our case we consume it see: res.on('data')
     res.on('end', () => {
-      timings.endAt = Date.now()
+      eventTimes.endAt = process.hrtime()
 
       callback(null, {
         headers: res.headers,
-        timings: getResult(timings),
+        timings: getTimings(eventTimes),
         body: responseBody
       })
     })
@@ -105,13 +83,13 @@ function request ({
   // Request events
   req.on('socket', (socket) => {
     socket.on('lookup', () => {
-      timings.dnsLookupAt = Date.now()
+      eventTimes.dnsLookupAt = process.hrtime()
     })
     socket.on('connect', () => {
-      timings.tcpConnectionAt = Date.now()
+      eventTimes.tcpConnectionAt = process.hrtime()
     })
     socket.on('secureConnect', () => {
-      timings.tlsHandshakeAt = Date.now()
+      eventTimes.tlsHandshakeAt = process.hrtime()
     })
     socket.on('timeout', () => {
       req.abort()
@@ -129,6 +107,48 @@ function request ({
   }
 
   req.end()
+}
+
+/**
+* Calculates HTTP timings
+* @function getTimings
+* @param {Object} eventTimes
+* @param {Number} eventTimes.startAt
+* @param {Number|undefined} eventTimes.dnsLookupAt
+* @param {Number} eventTimes.tcpConnectionAt
+* @param {Number|undefined} eventTimes.tlsHandshakeAt
+* @param {Number} eventTimes.firstByteAt
+* @param {Number} eventTimes.endAt
+* @return {Object} timings - { dnsLookup, tcpConnection, tlsHandshake, firstByte, contentTransfer, total }
+*/
+function getTimings (eventTimes) {
+  return {
+    // There is no DNS lookup with IP address
+    dnsLookup: eventTimes.dnsLookupAt !== undefined ?
+      getHrTimeDurationInMs(eventTimes.startAt, eventTimes.dnsLookupAt) : undefined,
+    tcpConnection: getHrTimeDurationInMs(eventTimes.dnsLookupAt || eventTimes.startAt, eventTimes.tcpConnectionAt),
+    // There is no TLS handshake without https
+    tlsHandshake: eventTimes.tlsHandshakeAt !== undefined ?
+      (getHrTimeDurationInMs(eventTimes.tcpConnectionAt, eventTimes.tlsHandshakeAt)) : undefined,
+    firstByte: getHrTimeDurationInMs((eventTimes.tlsHandshakeAt || eventTimes.tcpConnectionAt), eventTimes.firstByteAt),
+    contentTransfer: getHrTimeDurationInMs(eventTimes.firstByteAt, eventTimes.endAt),
+    total: getHrTimeDurationInMs(eventTimes.startAt, eventTimes.endAt)
+  }
+}
+
+/**
+* Get duration in milliseconds from process.hrtime()
+* @function getHrTimeDurationInMs
+* @param {Array} startTime - [seconds, nanoseconds]
+* @param {Array} endTime - [seconds, nanoseconds]
+* @return {Number} durationInMs
+*/
+function getHrTimeDurationInMs (startTime, endTime) {
+  const secondDiff = endTime[0] - startTime[0]
+  const nanoSecondDiff = endTime[1] - startTime[1]
+  const diffInNanoSecond = secondDiff * NS_PER_SEC + nanoSecondDiff
+
+  return diffInNanoSecond / MS_PER_NS
 }
 
 // Getting timings
